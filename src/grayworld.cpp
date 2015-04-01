@@ -8,175 +8,187 @@
 #include "grayworld.hpp"
 #include "util.hpp"
 
-cv::Mat AWB(const cv::Mat& in, float s1, float s2)
+using namespace cv;
+
+void AWB(const Mat& in, Mat& out)
 {
 	uint H = in.rows,
 	     W = in.cols,
 	     N = H * W;
 
-	// Create output file
-	cv::Mat out = cv::Mat(in.size(), in.type());
+	// Create output matrix
+	out = Mat(in.size(), in.type());
 
-	// Histogram with 2^8 bins
-	std::vector<uchar> hist(UCHAR_MAX);
+	// Calculate sum of values
+	ulong sum1 = 0, sum2 = 0, sum3 = 0;
+	Vec3b pixel;
+	for (uint j = 0; j < H; j++)
+		for (uint i = 0; i < W; i++)
+		{
+			pixel = in.at<Vec3b>(j, i);
+			sum1 += pixel[0];
+			sum2 += pixel[1];
+			sum3 += pixel[2];
+		}
 
-	// For each channel...
-	for (uint c = 0; c < 3; c++)
-	{
-		// Reset histogram
-		for (uint i = 0; i < UCHAR_MAX; i++)
-			hist[i] = 0;
+	// Find inverse of averages
+	float inv1 = (float)N / (float)sum1,
+	      inv2 = (float)N / (float)sum2,
+	      inv3 = (float)N / (float)sum3;
 
-		// Construct histogram
-		uchar v;
-		for (uint j = 0; j < H; j++)
-			for (uint i = 0; i < W; i++)
-			{
-				v = in.at<cv::Vec3b>(j, i)[c];
-				hist[v]++;
-			}
+	// Find maximum
+	float inv_max = max(inv1, max(inv2, inv3));
 
-		// Construct cumulative histogram
-		for (uint i = 1; i < UCHAR_MAX; i++)
-			hist[i] += hist[i - 1];
+	// Scale by maximum
+	inv1 /= inv_max;
+	inv2 /= inv_max;
+	inv3 /= inv_max;
 
-		// Calculate V_min and V_max
-		uchar vmin     = 0,
-		      vmax     = UCHAR_MAX - 1,
-		      vmin_lim = floor(s1 * (float)(N / 100.f)),
-		      vmax_lim = ceil((float)N * (1.f - s2 / 100.f));
-		while (hist[vmin + 1] < vmin_lim) vmin++;
-		while (hist[vmax - 1] > vmax_lim) vmax--;
-		if    (vmax < UCHAR_MAX - 1)      vmax++;
-
-		// Saturate pixels
-		for (uint j = 0; j < H; j++)
-			for (uint i = 0; i < W; i++)
-			{
-				v = in.at<cv::Vec3b>(j, i)[c];
-				if      (v < vmin) v = vmin;
-				else if (v > vmax) v = vmax;
-				v = (v - vmin) * (UCHAR_MAX / (vmax - vmin));
-				out.at<cv::Vec3b>(j, i)[c] = v;
-			}
-	}
-
-	return out;
+	// Scale input pixel values
+	for (uint j = 0; j < H; j++)
+		for (uint i = 0; i < W; i++)
+		{
+			pixel = in.at<Vec3b>(j, i);
+			pixel[0] = pixel[0] * inv1;
+			pixel[1] = pixel[1] * inv2;
+			pixel[2] = pixel[2] * inv3;
+			out.at<Vec3b>(j, i) = pixel;
+		}
 }
 
 
-cv::Mat AWB_SSE(const cv::Mat& in, float s1, float s2)
+void AWB_SSE(const Mat& in, Mat& out)
 {
-	uint H = in.rows,
-	     W = in.cols,
-	     N = H * W;
+	uint H  = in.rows,
+	     W  = in.cols,
+	     N  = H * W,
+	     N3 = N * 3,
+	     i;
 
-	// Create output file
-	cv::Mat out = cv::Mat(in.size(), in.type());
+	// Create output matrix
+	float output[N] __attribute__((__aligned__(16)));
+	out = Mat(in.size(), in.type(), output);
 
-	// Histogram with 2^8 bins
-	std::vector<uchar> hist(UCHAR_MAX);
+	// Get direct pointers for quick access
+	const uchar* _in  = in.ptr<uchar>(0);
+	      uchar* _out = out.ptr<uchar>(0);
 
-	// Look up table for final rescaling
-	std::vector<uchar> lut(UCHAR_MAX);
+	/**
+	 * Calculate sum of pixel values per channel
+	 */
+	ulong sum1, sum2, sum3; // 64 bits wide
+	ulong _sums[6] = {0, 0, 0, 0, 0, 0};
 
-	// Image of channel c
-	std::vector<uchar> subin(N);
+	__m128i val,
+	        sums1 = _mm_set1_epi64x(0),
+	        sums2 = _mm_set1_epi64x(0),
+	        sums3 = _mm_set1_epi64x(0);
 
-	// For each channel...
-	for (uint c = 0; c < 3; c++)
+	for (i = 0; i < N3; i += 12)
 	{
-		uint i;
+		val = _mm_set_epi64x(
+				_in[i + 1] + _in[i + 4],
+				_in[i] + _in[i + 3]);
+		sums1 = _mm_add_epi64(sums1, val);
 
-		// Reset histogram
-		__m128i zeros = _mm_set1_epi8(0x00);
-		for (i = 0; i < UCHAR_MAX; i += 16)
-			_mm_store_si128((__m128i*) &hist[i], zeros);
+		val = _mm_set_epi64x(
+				_in[i + 6] + _in[i + 9],
+				_in[i + 2] + _in[i + 5]);
+		sums2 = _mm_add_epi64(sums2, val);
 
-		// Create copy as subin
-		// and construct histogram
-		const cv::Vec3b* _in = in.ptr<cv::Vec3b>(0);
-		uchar v;
-		for (i = 0; i < N; i++)
-		{
-			v = _in[i][c];
-			subin[i] = v;
-			hist[v]++;
-		}
-
-		// Construct cumulative histogram
-		for (i = 1; i < UCHAR_MAX; i++)
-			hist[i] += hist[i - 1];
-
-		// Calculate V_min and V_max
-		uchar vmin     = 0,
-		      vmax     = UCHAR_MAX - 1,
-		      vmin_lim = floor(s1 * (float)(N / 100.f)),
-		      vmax_lim = ceil((float)N * (1.f - s2 / 100.f));
-		while (hist[vmin + 1] < vmin_lim) vmin++;
-		while (hist[vmax - 1] > vmax_lim) vmax--;
-		if    (vmax < UCHAR_MAX - 1)      vmax++;
-
-		// Correct pixels range
-		uchar vsuf = UCHAR_MAX / (vmax - vmin);
-		__m128i ones   = _mm_set1_epi8(0xFF),
-			hchar  = _mm_set1_epi8(0x80),
-			_vmin  = _mm_set1_epi8(vmin - 128),
-		        _vmax  = _mm_set1_epi8(vmax - 128),
-		        _vsuf  = _mm_set1_epi8(vsuf - 128),
-			_uvmin = _mm_set1_epi8(vmin),
-		        _uvmax = _mm_set1_epi8(vmax),
-		        _uvsuf = _mm_set1_epi8(vsuf);
-
-		// Set v < vmin to vmin
-		for (i = 0; i < N; i += 16)
-		{
-			__m128i dat = _mm_load_si128((__m128i*) &subin[i]);
-			__m128i cmp = _mm_cmplt_epi8(
-					_mm_sub_epi8(dat, hchar),
-					_vmin);                    // cmp
-			__m128i tru = _mm_and_si128(cmp, ones);    // true
-			__m128i fal = _mm_andnot_si128(cmp, ones); // false
-
-			dat = _mm_or_si128(
-				_mm_and_si128(_uvmin, tru),
-				_mm_and_si128(dat,   fal)
-			);
-			_mm_store_si128((__m128i*) &subin[i], dat);
-		}
-		for (; i < N; i++)
-			if (subin[i] < vmin) subin[i] = vmin;
-
-		// Set v > vmax to vmax
-		for (i = 0; i < N; i += 16)
-		{
-			__m128i dat = _mm_load_si128((__m128i*) &subin[i]);
-			__m128i cmp = _mm_cmpgt_epi8(
-					_mm_sub_epi8(dat, hchar),
-					_vmax);                    // cmp
-			__m128i tru = _mm_and_si128(cmp, ones);    // true
-			__m128i fal = _mm_andnot_si128(cmp, ones); // false
-
-			dat = _mm_or_si128(
-				_mm_and_si128(_uvmax, tru),
-				_mm_and_si128(dat,   fal)
-			);
-			_mm_store_si128((__m128i*) &subin[i], dat);
-		}
-		for (; i < N; i++)
-			if (subin[i] > vmax) subin[i] = vmax;
-
-		// Saturate
-		// Construct lookup table
-		for (i = 0; i < UCHAR_MAX; i++)
-			lut[i] = (i - vmin) * vsuf;
-
-		// Write to output
-		cv::Vec3b* _out = out.ptr<cv::Vec3b>(0);
-		for (i = 0; i < N; i++)
-			_out[i][c] = lut[subin[i]];
+		val = _mm_set_epi64x(
+				_in[i + 8] + _in[i + 11],
+				_in[i + 7] + _in[i + 10]);
+		sums3 = _mm_add_epi64(sums3, val);
 	}
 
-	return out;
+	_mm_store_si128((__m128i*) &_sums[0], sums1);
+	_mm_store_si128((__m128i*) &_sums[2], sums2);
+	_mm_store_si128((__m128i*) &_sums[4], sums3);
+
+	sum1 = _sums[0] + _sums[3];
+	sum2 = _sums[1] + _sums[4];
+	sum3 = _sums[2] + _sums[5];
+
+	// Cleanup
+	for (; i < N3; i += 3)
+	{
+		sum1 += _in[i];
+		sum2 += _in[i + 1];
+		sum3 += _in[i + 2];
+	}
+
+	// Find inverse of averages
+	float inv1 = (float)N / (float)sum1,
+	      inv2 = (float)N / (float)sum2,
+	      inv3 = (float)N / (float)sum3;
+
+	// Find maximum
+	float inv_max = max(inv1, max(inv2, inv3));
+
+	// Scale by maximum
+	inv1 /= inv_max;
+	inv2 /= inv_max;
+	inv3 /= inv_max;
+
+	// Scale input pixel values
+	__m128 fv1, fv2, fv3, fv4,
+	       scal1 = _mm_set_ps(inv1, inv3, inv2, inv1),
+	       scal2 = _mm_set_ps(inv2, inv1, inv3, inv2),
+	       scal3 = _mm_set_ps(inv3, inv2, inv1, inv3),
+	       scal4 = _mm_set_ps(0.f, inv3, inv2, inv1);
+	__m128i zeros = _mm_setzero_si128(),
+		iv1, iv2, iv3, iv4, iv5, iv6,
+		inv, outv;
+	for (i = 0; i < N3; i += 15)
+	{
+		// Load 16 uchars
+		inv = _mm_loadu_si128((__m128i*) &_in[i]);
+
+		// Split into two vectors of 8 ushorts
+		iv1 = _mm_unpacklo_epi8(inv, zeros);
+		iv2 = _mm_unpackhi_epi8(inv, zeros);
+
+		// Split into four vectors of 4 uints
+		iv3 = _mm_unpacklo_epi16(iv1, zeros);
+		iv4 = _mm_unpackhi_epi16(iv1, zeros);
+		iv5 = _mm_unpacklo_epi16(iv2, zeros);
+		iv6 = _mm_unpackhi_epi16(iv2, zeros);
+
+		// Convert into four vectors of 4 floats
+		fv1 = _mm_cvtepi32_ps(iv3);
+		fv2 = _mm_cvtepi32_ps(iv4);
+		fv3 = _mm_cvtepi32_ps(iv5);
+		fv4 = _mm_cvtepi32_ps(iv6);
+
+		// Multiply by scaling factors
+		fv1 = _mm_mul_ps(fv1, scal1);
+		fv2 = _mm_mul_ps(fv2, scal2);
+		fv3 = _mm_mul_ps(fv3, scal3);
+		fv4 = _mm_mul_ps(fv4, scal4);
+
+		// Convert back into four vectors of 4 uints
+		iv1 = _mm_cvtps_epi32(fv1);
+		iv2 = _mm_cvtps_epi32(fv2);
+		iv3 = _mm_cvtps_epi32(fv3);
+		iv4 = _mm_cvtps_epi32(fv4);
+
+		// Pack into two vectors of 8 ushorts
+		iv1 = _mm_packus_epi32(iv1, iv2);
+		iv2 = _mm_packus_epi32(iv3, iv4);
+
+		// Pack into vector of 16 uchars
+		outv = _mm_packus_epi16(iv1, iv2);
+
+		// Store
+		_mm_storeu_si128((__m128i*) &_out[i], outv);
+	}
+	// Cleanup
+	for(; i < N3; i += 3)
+	{
+		_out[i]     = _in[i]     * inv1;
+		_out[i + 1] = _in[i + 1] * inv2;
+		_out[i + 2] = _in[i + 2] * inv3;
+	}
 }
 

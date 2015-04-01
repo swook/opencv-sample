@@ -9,12 +9,12 @@
  *
  * NOTE: Assumed that input is an CV_8U BGR image
  */
-cv::Mat AWB(const cv::Mat& in, float s1 = 1.5, float s2 = 1.5);
+void AWB(const cv::Mat& in, cv::Mat& out);
 
 
 
 /**
  * Performs AWB using SSE intrinsics
  */
-cv::Mat AWB_SSE(const cv::Mat& in, float s1 = 1.5, float s2 = 1.5);
+void AWB_SSE(const cv::Mat& in, cv::Mat& out);
 

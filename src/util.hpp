@@ -5,9 +5,9 @@
 #include "opencv2/core/core.hpp"
 #include "opencv2/highgui/highgui.hpp"
 
-typedef unsigned int   uint;
-typedef unsigned short ushort;
-typedef unsigned char  uchar;
+typedef uint8_t  uchar;
+typedef uint32_t uint;
+typedef uint64_t ulong;
 
 extern bool GRAPHICAL; // Flag to enable/disable showImage
 

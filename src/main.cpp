@@ -60,13 +60,27 @@ int main(int argc, char** argv)
 
 
 	/**
+	 * Align input image
+	 */
+	uint H = img.rows,
+	     W = img.cols,
+	     N = H * W;
+	float input[N] __attribute__((__aligned__(16)));
+	cv::Mat in = cv::Mat(img.size(), img.type(), input);
+	img.copyTo(in);
+
+
+	/**
 	 * Validate AWB_SSE
 	 */
-	cv::Mat    out     = AWB(img);
-	cv::Mat    out_sse = AWB_SSE(img);
-	cv::Scalar diff    = cv::sum(out != out_sse);
-	if (diff[0] + diff[1] + diff[2] > 0)
+	cv::Mat out, out_sse;
+	AWB(in, out);
+	AWB_SSE(in, out_sse);
+
+	cv::Scalar err = norm(out - out_sse);
+	if (err[0] > 1)
 	{
+		std::cout << "Error is: " << err[0] << std::endl;
 		throw std::runtime_error("SSE implementation is wrong!");
 		return -1;
 	}
@@ -77,17 +91,18 @@ int main(int argc, char** argv)
 
 	if (BENCH)
 	{
-		uint max_steps = 5e2, nosse, sse;
+		uint max_steps = 1e3, nosse, sse;
 
-		nosse = benchmark([img](){AWB(img);}, max_steps);
+		nosse = benchmark([in, &out](){AWB(in, out);}, max_steps);
 		printf("Naive version took %d cycles\n", nosse);
 
-		sse = benchmark([img](){AWB_SSE(img);}, max_steps);
+		sse = benchmark([in, &out_sse](){AWB_SSE(in, out_sse);}, max_steps);
 		printf("SSE version took %d cycles\n", sse);
 
 		printf("> %.1fx speedup!\n", (float)nosse / (float)sse);
 	} else {
-		showImage("Output Image", out);
+		showImage("NO SSE", out);
+		showImage("SSE", out_sse);
 	}
 
 	if (GRAPHICAL)
