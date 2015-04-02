@@ -32,17 +32,20 @@ void AWB(const Mat& in, Mat& out)
 		}
 
 	// Find inverse of averages
-	float inv1 = (float)N / (float)sum1,
-	      inv2 = (float)N / (float)sum2,
-	      inv3 = (float)N / (float)sum3;
+	float inv1 = sum1 == 0 ? 0.f : (float)N / (float)sum1,
+	      inv2 = sum2 == 0 ? 0.f : (float)N / (float)sum2,
+	      inv3 = sum3 == 0 ? 0.f : (float)N / (float)sum3;
 
 	// Find maximum
 	float inv_max = max(inv1, max(inv2, inv3));
 
 	// Scale by maximum
-	inv1 /= inv_max;
-	inv2 /= inv_max;
-	inv3 /= inv_max;
+	if (inv_max > 0)
+	{
+		inv1 /= inv_max;
+		inv2 /= inv_max;
+		inv3 /= inv_max;
+	}
 
 	// Scale input pixel values
 	for (uint j = 0; j < H; j++)
@@ -128,17 +131,20 @@ void AWB_SSE(const Mat& in, Mat& out)
 	}
 
 	// Find inverse of averages
-	double dinv1 = (float)N / (float)sum1,
-	       dinv2 = (float)N / (float)sum2,
-	       dinv3 = (float)N / (float)sum3;
+	double dinv1 = sum1 == 0 ? 0.f : (float)N / (float)sum1,
+	       dinv2 = sum2 == 0 ? 0.f : (float)N / (float)sum2,
+	       dinv3 = sum3 == 0 ? 0.f : (float)N / (float)sum3;
 
 	// Find maximum
 	double inv_max = max(dinv1, max(dinv2, dinv3));
 
 	// Scale by maximum
-	dinv1 /= inv_max;
-	dinv2 /= inv_max;
-	dinv3 /= inv_max;
+	if (inv_max > 0)
+	{
+		dinv1 /= inv_max;
+		dinv2 /= inv_max;
+		dinv3 /= inv_max;
+	}
 
 	// Convert to floats
 	float inv1 = (float) dinv1,
