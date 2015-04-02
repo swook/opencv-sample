@@ -76,39 +76,48 @@ void AWB_SSE(const Mat& in, Mat& out)
 	/**
 	 * Calculate sum of pixel values per channel
 	 */
-	ulong sum1, sum2, sum3; // 64 bits wide
-	ulong _sums[6] = {0, 0, 0, 0, 0, 0};
+	__m128i zeros = _mm_setzero_si128(),
+		inv,
+		iv1, iv2, iv3, iv4, iv5, iv6,
+		sv1 = _mm_setzero_si128(),
+		sv2 = _mm_setzero_si128(),
+		sv3 = _mm_setzero_si128(),
+		sv4 = _mm_setzero_si128();
 
-	__m128i val,
-	        sums1 = _mm_set1_epi64x(0),
-	        sums2 = _mm_set1_epi64x(0),
-	        sums3 = _mm_set1_epi64x(0);
-
-	for (i = 0; i < N3; i += 12)
+	for (i = 0; i < N3; i += 15)
 	{
-		val = _mm_set_epi64x(
-				_in[i + 1] + _in[i + 4],
-				_in[i] + _in[i + 3]);
-		sums1 = _mm_add_epi64(sums1, val);
+		// Load 16 x 8bit uchars
+		inv = _mm_loadu_si128((__m128i*) &_in[i]);
 
-		val = _mm_set_epi64x(
-				_in[i + 6] + _in[i + 9],
-				_in[i + 2] + _in[i + 5]);
-		sums2 = _mm_add_epi64(sums2, val);
+		// Split into two vectors of 8 ushorts
+		iv1 = _mm_unpacklo_epi8(inv, zeros);
+		iv2 = _mm_unpackhi_epi8(inv, zeros);
 
-		val = _mm_set_epi64x(
-				_in[i + 8] + _in[i + 11],
-				_in[i + 7] + _in[i + 10]);
-		sums3 = _mm_add_epi64(sums3, val);
+		// Split into four vectors of 4 uints
+		iv3 = _mm_unpacklo_epi16(iv1, zeros);
+		iv4 = _mm_unpackhi_epi16(iv1, zeros);
+		iv5 = _mm_unpacklo_epi16(iv2, zeros);
+		iv6 = _mm_unpackhi_epi16(iv2, zeros);
+
+
+		// Add to accumulators
+		sv1 = _mm_add_epi32(sv1, iv3);
+		sv2 = _mm_add_epi32(sv2, iv4);
+		sv3 = _mm_add_epi32(sv3, iv5);
+		sv4 = _mm_add_epi32(sv4, iv6);
 	}
 
-	_mm_store_si128((__m128i*) &_sums[0], sums1);
-	_mm_store_si128((__m128i*) &_sums[2], sums2);
-	_mm_store_si128((__m128i*) &_sums[4], sums3);
+	// Store accumulated values into memory
+	uint sums[16];
+	_mm_store_si128((__m128i*) &sums[0],  sv1);
+	_mm_store_si128((__m128i*) &sums[4],  sv2);
+	_mm_store_si128((__m128i*) &sums[8],  sv3);
+	_mm_store_si128((__m128i*) &sums[12], sv4);
 
-	sum1 = _sums[0] + _sums[3];
-	sum2 = _sums[1] + _sums[4];
-	sum3 = _sums[2] + _sums[5];
+	// Perform final reduction
+	ulong sum1 = sums[0] + sums[3] + sums[6] + sums[9],
+	      sum2 = sums[1] + sums[4] + sums[7] + sums[10],
+	      sum3 = sums[2] + sums[5] + sums[8] + sums[11];
 
 	// Cleanup
 	for (; i < N3; i += 3)
@@ -119,17 +128,22 @@ void AWB_SSE(const Mat& in, Mat& out)
 	}
 
 	// Find inverse of averages
-	float inv1 = (float)N / (float)sum1,
-	      inv2 = (float)N / (float)sum2,
-	      inv3 = (float)N / (float)sum3;
+	double dinv1 = (float)N / (float)sum1,
+	       dinv2 = (float)N / (float)sum2,
+	       dinv3 = (float)N / (float)sum3;
 
 	// Find maximum
-	float inv_max = max(inv1, max(inv2, inv3));
+	double inv_max = max(dinv1, max(dinv2, dinv3));
 
 	// Scale by maximum
-	inv1 /= inv_max;
-	inv2 /= inv_max;
-	inv3 /= inv_max;
+	dinv1 /= inv_max;
+	dinv2 /= inv_max;
+	dinv3 /= inv_max;
+
+	// Convert to floats
+	float inv1 = (float) dinv1,
+	      inv2 = (float) dinv2,
+	      inv3 = (float) dinv3;
 
 	// Scale input pixel values
 	__m128 fv1, fv2, fv3, fv4,
@@ -137,9 +151,7 @@ void AWB_SSE(const Mat& in, Mat& out)
 	       scal2 = _mm_set_ps(inv2, inv1, inv3, inv2),
 	       scal3 = _mm_set_ps(inv3, inv2, inv1, inv3),
 	       scal4 = _mm_set_ps(0.f, inv3, inv2, inv1);
-	__m128i zeros = _mm_setzero_si128(),
-		iv1, iv2, iv3, iv4, iv5, iv6,
-		inv, outv;
+	__m128i outv;
 	for (i = 0; i < N3; i += 15)
 	{
 		// Load 16 uchars

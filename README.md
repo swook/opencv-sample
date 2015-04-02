@@ -35,6 +35,6 @@ See `--help` for all available options.
 
 ## Speedup
 
-The SSE version currently shows a speedup of up to 3.1x on an Intel Ivy Bridge
+The SSE version currently shows a speedup of up to 5.7x on an Intel Ivy Bridge
 mobile processor compared to the naive implementation.
 
