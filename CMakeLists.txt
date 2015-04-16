@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 2.8)
 project(grayworld)
 
 # Add libraries
-find_package(OpenCV REQUIRED core highgui)
+find_package(OpenCV REQUIRED core highgui imgcodecs)
 find_package(Boost  REQUIRED program_options)
 
 include_directories(${Boost_INCLUDE_DIRS})
